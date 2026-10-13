@@ -29,7 +29,6 @@ LAST = {"payload": None, "at": None, "result": None}
 app = FastAPI(title="Mockup Plaquinha NFC")
 
 IMG_EXT = re.compile(r"https?://[^\s\"'<>]+", re.I)
-IG = re.compile(r"(?:instagram\.com/|@)([A-Za-z0-9_.]{2,30})")
 
 
 def base_url(request: Request) -> str:
@@ -63,7 +62,7 @@ def is_image(url: str) -> bool:
 
 
 def find_logo(payload):
-    """Ordem: imagem que o lead mandou -> @ do Instagram -> foto de perfil do WhatsApp."""
+    """Usa só a imagem (logo) que o lead mandou."""
     items = list(walk(payload))
     urls, pics, texts = [], [], []
     for path, v in items:
@@ -78,15 +77,6 @@ def find_logo(payload):
     for u in urls:                       # mídia enviada (logo)
         if is_image(u):
             return u, "imagem"
-    for t in texts:                      # @ ou link do Instagram
-        m = IG.search(t)
-        if m and "." not in m.group(1)[-1:]:
-            u = f"https://unavatar.io/instagram/{m.group(1)}?fallback=false"
-            if is_image(u):
-                return u, "instagram"
-    for u in pics:                       # foto do perfil do WhatsApp
-        if is_image(u):
-            return u, "foto_whatsapp"
     return None, None
 
 
@@ -137,10 +127,8 @@ async def mockup(request: Request):
         except Exception:
             pass
     src = params.get("logo_url")
-    if not src and params.get("instagram"):
-        src = f"https://unavatar.io/instagram/{params['instagram'].lstrip('@')}?fallback=false"
     if not src:
-        return JSONResponse({"ok": False, "erro": "envie logo_url ou instagram"}, status_code=400)
+        return JSONResponse({"ok": False, "erro": "envie logo_url"}, status_code=400)
     return render(src, params.get("nome"), request)
 
 
