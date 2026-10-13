@@ -13,7 +13,7 @@ A = lambda f: os.path.join(HERE, f)
 W, H = 1000, 1500          # arte 10x15 cm
 SS = 2                     # supersampling para bordas suaves
 INK = (45, 40, 38)
-QUAD = np.float32([[153, 61], [728, 59], [836, 904], [292, 1037]]) * 2  # frente do acrílico em base.jpg
+QUAD = np.float32([[153, 61], [728, 59], [836, 904], [292, 1037]])  # frente do acrílico em base.jpg
 
 
 def font(name, size):
@@ -25,11 +25,13 @@ def load_image(src):
     if isinstance(src, (bytes, bytearray)):
         data = bytes(src)
     elif str(src).startswith("http"):
-        req = urllib.request.Request(src, headers={"User-Agent": "Mozilla/5.0"})
+        req = urllib.request.Request(src, headers={"User-Agent": "PlaquinhaMockup/1.0 (mockup generator)"})
         data = urllib.request.urlopen(req, timeout=20).read()
     else:
         data = open(src, "rb").read()
-    return Image.open(io.BytesIO(data)).convert("RGBA")
+    im = Image.open(io.BytesIO(data)).convert("RGBA")
+    im.thumbnail((1000, 1000), Image.LANCZOS)
+    return im
 
 
 def clean_logo(img):
@@ -183,7 +185,6 @@ def make_mockup(design_pil):
     bg = cv2.imread(A("base.jpg"))
     Hh, Ww = bg.shape[:2]
     des = cv2.cvtColor(np.array(design_pil.convert("RGB")), cv2.COLOR_RGB2BGR)
-    des = cv2.resize(des, (W * 2, H * 2), interpolation=cv2.INTER_CUBIC)
     h, w = des.shape[:2]
     M = cv2.getPerspectiveTransform(np.float32([[0, 0], [w, 0], [w, h], [0, h]]), QUAD)
     warped = cv2.warpPerspective(des, M, (Ww, Hh), flags=cv2.INTER_AREA)
@@ -192,16 +193,14 @@ def make_mockup(design_pil):
     bgf = bg.astype(np.float32) / 255
     wf = warped.astype(np.float32) / 255
     mb = (m[..., 0] * 255).astype(np.uint8)
-    inner = cv2.erode(mb, np.ones((24, 24), np.uint8))
+    inner = cv2.erode(mb, np.ones((12, 12), np.uint8))
     edge = cv2.GaussianBlur((mb.astype(np.float32) - inner.astype(np.float32)) / 255, (9, 9), 0)[..., None]
     shade = np.clip(bgf * 1.04, 0, 1) * edge + (1 - edge)
     comp = bgf * (1 - m) + (wf * shade) * m
-    yy, xx = np.mgrid[0:Hh, 0:Ww].astype(np.float32)
-    band = np.exp(-(((xx * 0.55 + yy) - 1400) / 340) ** 2) * 0.22
-    band += np.exp(-(((xx * 0.55 + yy) - 2160) / 90) ** 2) * 0.12
+    t = np.arange(Ww, dtype=np.float32)[None, :] * 0.55 + np.arange(Hh, dtype=np.float32)[:, None]
+    band = np.exp(-((t - 700) / 170) ** 2) * 0.22 + np.exp(-((t - 1080) / 45) ** 2) * 0.12
     comp = comp + (1 - comp) * band[..., None] * m
     out = (np.clip(comp, 0, 1) * 255).astype(np.uint8)
-    out = cv2.resize(out, (Ww // 2 + 300, int(Hh * (Ww // 2 + 300) / Ww)), interpolation=cv2.INTER_AREA)
     ok, buf = cv2.imencode(".jpg", out, [cv2.IMWRITE_JPEG_QUALITY, 90])
     return buf.tobytes()
 

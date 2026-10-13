@@ -53,7 +53,7 @@ def walk(obj, path=""):
 
 def is_image(url: str) -> bool:
     try:
-        req = urllib.request.Request(url, method="GET", headers={"User-Agent": "Mozilla/5.0", "Range": "bytes=0-64"})
+        req = urllib.request.Request(url, method="GET", headers={"User-Agent": "PlaquinhaMockup/1.0 (mockup generator)"})
         with urllib.request.urlopen(req, timeout=10) as r:
             ct = r.headers.get("Content-Type", "")
             head = r.read(16)
