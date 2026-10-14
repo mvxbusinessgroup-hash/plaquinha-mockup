@@ -129,8 +129,23 @@ def make_design(logo_src, nome=None):
     cx, cy, r = 500, 235, 172
     lum = np.array(logo.convert("L"))[np.array(logo)[..., 3] > 200].mean() if not complex_bg else 128
     circle_fill = (35, 35, 35) if lum > 215 else (255, 255, 255)
-    d.ellipse([(cx - r) * s, (cy - r) * s, (cx + r) * s, (cy + r) * s], fill=circle_fill, outline=INK, width=4 * s)
-    if complex_bg:  # foto: recorte circular cobrindo o círculo
+    ar = raw.width / raw.height
+    wide = complex_bg and (ar > 1.25 or ar < 0.8)
+    if wide:  # foto retangular (ex.: fachada/placa): mostra inteira num quadro arredondado
+        maxw, maxh = 760, 340
+        bw, bh = (maxw, maxw / ar) if maxw / ar <= maxh else (maxh * ar, maxh)
+        bw, bh = int(bw), int(bh)
+        ph = raw.convert("RGB").resize((bw * s, bh * s), Image.LANCZOS)
+        m = Image.new("L", ph.size, 0)
+        ImageDraw.Draw(m).rounded_rectangle([0, 0, ph.width - 1, ph.height - 1], 28 * s, fill=255)
+        x0, y0 = (cx - bw // 2) * s, (cy - bh // 2) * s
+        im.paste(ph, (x0, y0), m)
+        d.rounded_rectangle([x0, y0, x0 + ph.width, y0 + ph.height], 28 * s, outline=INK, width=4 * s)
+    else:
+        d.ellipse([(cx - r) * s, (cy - r) * s, (cx + r) * s, (cy + r) * s], fill=circle_fill, outline=INK, width=4 * s)
+    if wide:
+        pass
+    elif complex_bg:  # foto: recorte circular cobrindo o círculo
         side = min(raw.size)
         sq = raw.crop(((raw.width - side) // 2, (raw.height - side) // 2, (raw.width + side) // 2, (raw.height + side) // 2))
         sq = sq.resize((2 * (r - 4) * s, 2 * (r - 4) * s), Image.LANCZOS)
