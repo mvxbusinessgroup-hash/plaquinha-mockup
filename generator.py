@@ -177,82 +177,85 @@ def _nfc_art(d, cx, cy, s, ink, bg):
 def make_design(logo_src, nome=None):
     raw = load_image(logo_src)
     logo, complex_bg = clean_logo(raw)
-    ra0 = np.array(raw.convert("RGB")).astype(np.float32)
-    bmed = np.median(np.concatenate([ra0[0], ra0[-1], ra0[:, 0], ra0[:, -1]]), axis=0)
-    if lum(bmed) < 70 and 0.8 <= raw.width / raw.height <= 1.25 and (np.array(raw)[..., 3] > 250).mean() > 0.98:
-        complex_bg = True   # logo quadrada com fundo escuro (foto de perfil): usa como selo redondo
+    rgba = np.array(raw)
+    opaque = (rgba[..., 3] > 250).mean() > 0.98
+    ra0 = rgba[..., :3].astype(np.float32)
+    border = np.concatenate([ra0[0], ra0[-1], ra0[:, 0], ra0[:, -1]])
+    bmed = tuple(int(v) for v in np.median(border, axis=0))
     main, sec = brand_colors(logo if not complex_bg else raw)
     if lum(main) > 225 and (max(main) - min(main)) < 40:
         main, sec = (sec or (40, 40, 40)), None
+    vivid = (max(main) - min(main)) > 60
     s = SS
     Wp, Hp = W * s, H * s
-    # fundo: tom profundo da cor da marca (estilo acrílico premium)
-    sat = max(main) - min(main)
-    base = mix(main, (18, 18, 20), 0.45 if sat > 60 else 0.75)
-    if complex_bg:   # logo com fundo próprio (ex.: foto de perfil): usa o tom da borda se for escuro
-        ra = np.array(raw.convert("RGB")).astype(np.float32)
-        border = np.concatenate([ra[0], ra[-1], ra[:, 0], ra[:, -1]])
-        bc = tuple(int(v) for v in np.median(border, axis=0))
-        if lum(bc) < 70:
-            base = mix((16, 16, 18), main, 0.10)
+
+    # ---- cor da plaquinha combinando com a logo
+    if opaque and not complex_bg:
+        base = bmed                      # mesmo fundo da logo: integra perfeito
+        if lum(base) > 200 and vivid:     # logo em fundo branco: plaquinha clara levemente tingida
+            base = mix(base, main, 0.07)
+    elif vivid and lum(main) > 150:      # cores claras (amarelo, laranja claro): fundo preto com brilho da cor
+        base = mix((14, 14, 16), main, 0.06)
+    elif vivid:
+        base = shade(main, 0.62)
     else:
-        a0 = np.array(logo)
-        if (a0[..., 3] > 200).any() and lum(a0[a0[..., 3] > 200][:, :3].mean(0)) < 90:
-            base = mix((16, 16, 18), main, 0.10)
-    ink = (255, 255, 255)
-    top, bot = shade(base, 1.15), shade(base, 0.8)
+        base = mix(main, (18, 18, 20), 0.6)
+    dark = lum(base) < 150
+    ink = (255, 255, 255) if dark else (32, 32, 38)
+    accent = main if vivid else (sec or ink)
+    if abs(lum(accent) - lum(base)) < 45:   # destaque precisa aparecer no fundo
+        accent = sec if (sec and abs(lum(sec) - lum(base)) >= 45) else ink
+
+    # fundo com degradê suave + brilho da cor da marca
+    top = mix(base, accent, 0.10) if dark else shade(base, 1.0)
+    bot = shade(base, 0.85) if dark else mix(base, (0, 0, 0), 0.06)
     g = np.linspace(0, 1, Hp)[:, None, None]
     arr = (np.array(top)[None, None, :] * (1 - g) + np.array(bot)[None, None, :] * g).repeat(Wp, axis=1)
     im = Image.fromarray(np.clip(arr, 0, 255).astype(np.uint8), "RGB").convert("RGBA")
-    # ondas decorativas finas no canto
+    from PIL import ImageFilter
+    glow = Image.new("RGBA", im.size, (0, 0, 0, 0))
+    gd = ImageDraw.Draw(glow)
+    if accent != ink:
+        ga = 70 if dark else 38
+        gd.ellipse([150 * s, -60 * s, 850 * s, 500 * s], fill=accent + (ga,))
+        gd.ellipse([600 * s, 1150 * s, 1200 * s, 1650 * s], fill=accent + (ga * 4 // 7,))
+        glow = glow.filter(ImageFilter.GaussianBlur(110 * s))
+        im = Image.alpha_composite(im, glow)
     ov = Image.new("RGBA", im.size, (0, 0, 0, 0))
     od = ImageDraw.Draw(ov)
+    lc = accent if accent != ink else ink
     for k in range(14):
         r = 180 + k * 18
-        od.arc([(1000 - r) * s, (-r) * s, (1000 + r) * s, (r) * s], 90, 180, fill=(255, 255, 255, 34), width=2 * s)
+        od.arc([(1000 - r) * s, (-r) * s, (1000 + r) * s, (r) * s], 90, 180, fill=lc + (60,), width=2 * s)
         r2 = 140 + k * 18
-        od.arc([(-r2) * s, (1500 - r2) * s, (r2) * s, (1500 + r2) * s], 270, 360, fill=(255, 255, 255, 22), width=2 * s)
+        od.arc([(-r2) * s, (1500 - r2) * s, (r2) * s, (1500 + r2) * s], 270, 360, fill=lc + (45,), width=2 * s)
     im = Image.alpha_composite(im, ov).convert("RGB")
     d = ImageDraw.Draw(im)
 
-    # logo no topo
-    lcx, lcy = 500, 200
-    ar = raw.width / raw.height
-    if complex_bg and 0.8 <= ar <= 1.25:   # foto/selo quadrado: círculo
-        dia = 280
-        sq = _fit(raw.convert("RGB"), dia * s, dia * s, cover=True)
-        m = Image.new("L", sq.size, 0)
-        ImageDraw.Draw(m).ellipse([0, 0, sq.width - 1, sq.height - 1], fill=255)
-        im.paste(sq, ((lcx - dia // 2) * s, (lcy - dia // 2) * s), m)
-    elif complex_bg:
-        cw, ch = 540, 270
-        ph = _fit(raw.convert("RGB"), cw * s, ch * s, cover=True)
-        m = Image.new("L", ph.size, 0)
-        ImageDraw.Draw(m).rounded_rectangle([0, 0, ph.width - 1, ph.height - 1], 30 * s, fill=255)
-        im.paste(ph, ((lcx - cw // 2) * s, (lcy - ch // 2) * s), m)
-        d.rounded_rectangle([(lcx - cw // 2) * s, (lcy - ch // 2) * s, (lcx + cw // 2) * s, (lcy + ch // 2) * s], 30 * s, outline=ink, width=3 * s)
+    # ---- logo integrada (sem fundo)
+    lcx, lcy = 500, 205
+    if complex_bg:
+        ar = raw.width / raw.height
+        if 0.8 <= ar <= 1.25:
+            dia = 290
+            sq = _fit(raw.convert("RGB"), dia * s, dia * s, cover=True)
+            m = Image.new("L", sq.size, 0)
+            ImageDraw.Draw(m).ellipse([0, 0, sq.width - 1, sq.height - 1], fill=255)
+            m = m.filter(ImageFilter.GaussianBlur(2 * s))
+            im.paste(sq, ((lcx - dia // 2) * s, (lcy - dia // 2) * s), m)
+        else:
+            cw, ch = 540, 270
+            ph = _fit(raw.convert("RGB"), cw * s, ch * s, cover=True)
+            m = Image.new("L", ph.size, 0)
+            ImageDraw.Draw(m).rounded_rectangle([0, 0, ph.width - 1, ph.height - 1], 30 * s, fill=255)
+            im.paste(ph, ((lcx - cw // 2) * s, (lcy - ch // 2) * s), m)
     else:
-        a = np.array(logo)
-        vis = a[a[..., 3] > 200][:, :3].astype(np.float32)
-        lv = 0.299 * vis[:, 0] + 0.587 * vis[:, 1] + 0.114 * vis[:, 2] if len(vis) else np.array([128.0])
-        contrast = (np.abs(lv - lum(base)) > 80).mean()
-        contrast = 1 if contrast > 0.15 else contrast
-        lg = _fit(logo, 460 * s, 230 * s)
-        if contrast < 0.35:   # pouco contraste: selo branco atrás da logo
-            pad = 34 * s
-            bw, bh = lg.width + 2 * pad, lg.height + 2 * pad
-            d.rounded_rectangle([lcx * s - bw // 2, lcy * s - bh // 2, lcx * s + bw // 2, lcy * s + bh // 2], 36 * s, fill="white")
+        lg = _fit(logo, 520 * s, 300 * s)
         im.paste(lg, (lcx * s - lg.width // 2, lcy * s - lg.height // 2), lg)
     d = ImageDraw.Draw(im)
-    if nome:
-        f = font("Medium", 30)
-        t = nome.upper()[:32]
-        while d.textlength(t, font=f) > 800 * s and f.size > 18 * s:
-            f = ImageFont.truetype(A("Poppins-Medium.ttf"), f.size - 2 * s)
-        d.text((Wp / 2, 375 * s), t, font=f, fill=ink, anchor="mm")
 
     # arte NFC
-    _nfc_art(d, 520, 570, s, ink, base)
+    _nfc_art(d, 520, 580, s, ink, base if not dark else mix(base, accent, 0.0))
 
     # Aproxime o celular
     fb = font("Bold", 46)
@@ -260,20 +263,19 @@ def make_design(logo_src, nome=None):
     t1, t2 = "Aproxime", " o celular"
     w1, w2 = d.textlength(t1, font=fb), d.textlength(t2, font=fr)
     x0 = Wp / 2 - (w1 + w2) / 2
-    d.text((x0, 820 * s), t1, font=fb, fill=ink, anchor="lm")
-    d.text((x0 + w1, 820 * s), t2, font=fr, fill=ink, anchor="lm")
+    d.text((x0, 830 * s), t1, font=fb, fill=accent, anchor="lm")
+    d.text((x0 + w1, 830 * s), t2, font=fr, fill=ink, anchor="lm")
 
-    # ícones
-    _icon_row(d, 935, s, ink, base)
+    _icon_row(d, 945, s, ink, base)
 
     # QR
-    qs, qy = 380, 1020
+    qs, qy = 370, 1030
     qx = 500 - qs // 2
-    d.rounded_rectangle([qx * s, qy * s, (qx + qs) * s, (qy + qs) * s], 34 * s, fill="white")
+    d.rounded_rectangle([qx * s, qy * s, (qx + qs) * s, (qy + qs) * s], 34 * s, fill="white", outline=(None if dark else ink), width=(0 if dark else 3 * s))
     qr = Image.open(A("qr.png")).convert("RGB").resize(((qs - 64) * s, (qs - 64) * s), Image.NEAREST)
     im.paste(qr, ((qx + 32) * s, (qy + 32) * s))
     f = font("Bold", 30)
-    d.text((Wp / 2, (qy + qs + 42) * s), "Escaneie o QR Code", font=f, fill=ink, anchor="mm")
+    d.text((Wp / 2, (qy + qs + 40) * s), "Escaneie o QR Code", font=f, fill=ink, anchor="mm")
 
     return im.resize((W, H), Image.LANCZOS)
 
