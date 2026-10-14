@@ -64,133 +64,204 @@ def clean_logo(img):
     return Image.fromarray(out), False
 
 
-def brand_color(img):
+def brand_colors(img):
+    """Retorna (cor_principal, cor_secundaria|None) da logo."""
     a = np.array(img.convert("RGBA"))
     px = a[a[..., 3] > 200][:, :3]
     if len(px) < 50:
-        return (90, 90, 90)
+        return (60, 60, 60), None
     hsv = cv2.cvtColor(px.reshape(-1, 1, 3).astype(np.uint8), cv2.COLOR_RGB2HSV).reshape(-1, 3)
-    sel = px[(hsv[:, 1] > 90) & (hsv[:, 2] > 60)]
+    sel = px[(hsv[:, 1] > 45) & (hsv[:, 2] > 60)]
     if len(sel) < max(30, 0.03 * len(px)):
-        return (90, 90, 90)
+        return (60, 60, 60), None
     sel = sel[:: max(1, len(sel) // 4000)].astype(np.float32)
-    k = min(3, len(sel))
+    k = min(4, len(sel))
     _, labels, centers = cv2.kmeans(sel, k, None, (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 20, 1.0), 3, cv2.KMEANS_PP_CENTERS)
-    best = np.bincount(labels.ravel()).argmax()
-    return tuple(int(c) for c in centers[best])
+    cnt = np.bincount(labels.ravel(), minlength=k).astype(np.float32)
+    sat = cv2.cvtColor(np.clip(centers, 0, 255).astype(np.uint8).reshape(-1, 1, 3), cv2.COLOR_RGB2HSV).reshape(-1, 3)[:, 1].astype(np.float32)
+    order = np.argsort(-(cnt * (sat / 255) ** 2))
+    cols = [tuple(int(c) for c in centers[i]) for i in order]
+    main = cols[0]
+    sec = None
+    for c in cols[1:]:
+        if np.abs(np.array(c) - np.array(main)).sum() > 160:
+            sec = c
+            break
+    return main, sec
+
+
+def brand_color(img):
+    return brand_colors(img)[0]
+
+
+def lum(c):
+    return 0.299 * c[0] + 0.587 * c[1] + 0.114 * c[2]
+
+
+def shade(c, k):
+    return tuple(int(max(0, min(255, v * k))) for v in c)
+
+
+def mix(a, b, t):
+    return tuple(int(a[i] * (1 - t) + b[i] * t) for i in range(3))
 
 
 # ---------------------------------------------------------------- arte
-def _icons(d, cx, cy, gap, ink):
-    s = SS
+def _glyph(d, i, x, y, s, col):
     lw = 4 * s
-    labels = ["Avalie", "Wi-Fi", "Instagram", "WhatsApp", "Pix"]
-    f = font("Regular", 22)
-    for i, lab in enumerate(labels):
-        x = (cx + (i - 2) * gap) * s
-        y = cy * s
-        if i == 0:   # estrela
-            pts = []
-            for k in range(10):
-                r = (34 if k % 2 == 0 else 15) * s
-                ang = np.pi / 2 + k * np.pi / 5
-                pts.append((x + r * np.cos(ang), y - r * np.sin(ang)))
-            d.polygon(pts, outline=ink, width=lw)
-        elif i == 1:  # wi-fi
-            for r in (14, 26, 38):
-                d.arc([x - r * s, y + 14 * s - r * s, x + r * s, y + 14 * s + r * s], 225, 315, fill=ink, width=lw)
-            d.ellipse([x - 5 * s, y + 9 * s, x + 5 * s, y + 19 * s], fill=ink)
-        elif i == 2:  # câmera
-            d.rounded_rectangle([x - 32 * s, y - 22 * s, x + 32 * s, y + 24 * s], 10 * s, outline=ink, width=lw)
-            d.rounded_rectangle([x - 14 * s, y - 31 * s, x + 14 * s, y - 22 * s], 4 * s, fill=ink)
-            d.ellipse([x - 13 * s, y - 12 * s, x + 13 * s, y + 14 * s], outline=ink, width=lw)
-        elif i == 3:  # balão
-            d.ellipse([x - 32 * s, y - 28 * s, x + 32 * s, y + 22 * s], outline=ink, width=lw)
-            d.polygon([(x - 26 * s, y + 8 * s), (x - 34 * s, y + 32 * s), (x - 10 * s, y + 20 * s)], fill=ink)
-        else:          # losango
-            d.polygon([(x, y - 30 * s), (x + 30 * s, y), (x, y + 30 * s), (x - 30 * s, y)], outline=ink, width=lw)
-        tw = d.textlength(lab, font=f)
-        d.text((x - tw / 2, y + 44 * s), lab, font=f, fill=ink)
+    if i == 0:   # estrela cheia
+        pts = []
+        for k in range(10):
+            r = (26 if k % 2 == 0 else 11) * s
+            ang = np.pi / 2 + k * np.pi / 5
+            pts.append((x + r * np.cos(ang), y - r * np.sin(ang) + 2 * s))
+        d.polygon(pts, fill=col)
+    elif i == 1:  # wi-fi
+        for r in (10, 20, 30):
+            d.arc([x - r * s, y + 12 * s - r * s, x + r * s, y + 12 * s + r * s], 225, 315, fill=col, width=lw)
+        d.ellipse([x - 4 * s, y + 8 * s, x + 4 * s, y + 16 * s], fill=col)
+    elif i == 2:  # instagram
+        d.rounded_rectangle([x - 22 * s, y - 22 * s, x + 22 * s, y + 22 * s], 12 * s, outline=col, width=lw)
+        d.ellipse([x - 10 * s, y - 10 * s, x + 10 * s, y + 10 * s], outline=col, width=lw)
+        d.ellipse([x + 11 * s, y - 16 * s, x + 17 * s, y - 10 * s], fill=col)
+    elif i == 3:  # whatsapp
+        d.ellipse([x - 22 * s, y - 22 * s, x + 22 * s, y + 20 * s], outline=col, width=lw)
+        d.polygon([(x - 18 * s, y + 8 * s), (x - 24 * s, y + 26 * s), (x - 6 * s, y + 18 * s)], fill=col)
+        d.rounded_rectangle([x - 9 * s, y - 10 * s, x - 3 * s, y + 2 * s], 3 * s, fill=col)
+        d.line([(x - 6 * s, y + 0 * s), (x + 6 * s, y + 9 * s)], fill=col, width=lw)
+        d.rounded_rectangle([x + 3 * s, y + 4 * s, x + 11 * s, y + 10 * s], 3 * s, fill=col)
+    else:          # pix
+        for dx, dy in ((0, -13), (13, 0), (0, 13), (-13, 0)):
+            cxp, cyp = x + dx * s, y + dy * s
+            d.polygon([(cxp, cyp - 9 * s), (cxp + 9 * s, cyp), (cxp, cyp + 9 * s), (cxp - 9 * s, cyp)], fill=col)
+
+
+def _shadow(im, box, radius, s, strength=70, blur=18, dy=10):
+    sh = Image.new("L", im.size, 0)
+    x0, y0, x1, y1 = box
+    ImageDraw.Draw(sh).rounded_rectangle([x0, y0 + dy * s, x1, y1 + dy * s], radius, fill=strength)
+    from PIL import ImageFilter
+    sh = sh.filter(ImageFilter.GaussianBlur(blur * s))
+    im.paste((0, 0, 0), (0, 0), sh)
+
+
+def _fit(img, w, h, cover=False):
+    ar, br = img.width / img.height, w / h
+    if (ar > br) == cover:
+        nh = h; nw = int(h * ar)
+    else:
+        nw = w; nh = int(w / ar)
+    img = img.resize((max(1, nw), max(1, nh)), Image.LANCZOS)
+    if cover:
+        l, t = (img.width - w) // 2, (img.height - h) // 2
+        img = img.crop((l, t, l + w, t + h))
+    return img
 
 
 def make_design(logo_src, nome=None):
     raw = load_image(logo_src)
     logo, complex_bg = clean_logo(raw)
-    brand = brand_color(logo if not complex_bg else raw)
+    main, sec = brand_colors(logo if not complex_bg else raw)
+    if lum(main) > 225 and (max(main) - min(main)) < 40:   # cor quase branca: usa a secundária
+        main, sec = (sec or (40, 40, 40)), None
     s = SS
-    im = Image.new("RGB", (W * s, H * s), "white")
+    Wp, Hp = W * s, H * s
+    light = lum(main) > 160
+    txt = (25, 30, 45) if light else (255, 255, 255)
+    accent = sec if (sec and abs(lum(sec) - lum((255, 255, 255))) > 60) else (shade(main, 0.55) if light else main)
+    if lum(accent) > 200:
+        accent = (35, 40, 55)
+
+    # fundo em degradê da cor da marca
+    top, bot = shade(main, 1.08), shade(main, 0.78)
+    g = np.linspace(0, 1, Hp)[:, None, None]
+    arr = (np.array(top)[None, None, :] * (1 - g) + np.array(bot)[None, None, :] * g).repeat(Wp, axis=1)
+    im = Image.fromarray(arr.astype(np.uint8), "RGB")
     d = ImageDraw.Draw(im)
-    deco = brand
-    # círculos decorativos (iguais aos modelos do Canva)
-    d.ellipse([(940 - 292) * s, (35 - 292) * s, (940 + 292) * s, (35 + 292) * s], fill=deco)
-    d.ellipse([(56 - 222) * s, (1398 - 222) * s, (56 + 222) * s, (1398 + 222) * s], fill=deco)
+    # formas decorativas suaves
+    ov = Image.new("RGBA", im.size, (0, 0, 0, 0))
+    od = ImageDraw.Draw(ov)
+    od.ellipse([(760) * s, (-180) * s, (1260) * s, (320) * s], fill=(255, 255, 255, 38))
+    od.ellipse([(-260) * s, (1180) * s, (240) * s, (1680) * s], fill=(255, 255, 255, 30))
+    od.ellipse([(-140) * s, (380) * s, (60) * s, (580) * s], fill=(0, 0, 0, 22))
+    im.paste(ov, (0, 0), ov)
+    d = ImageDraw.Draw(im)
 
-    # logo no círculo
-    cx, cy, r = 500, 235, 172
-    lum = np.array(logo.convert("L"))[np.array(logo)[..., 3] > 200].mean() if not complex_bg else 128
-    circle_fill = (35, 35, 35) if lum > 215 else (255, 255, 255)
-    ar = raw.width / raw.height
-    wide = complex_bg and (ar > 1.25 or ar < 0.8)
-    if wide:  # foto retangular (ex.: fachada/placa): mostra inteira num quadro arredondado
-        maxw, maxh = 760, 340
-        bw, bh = (maxw, maxw / ar) if maxw / ar <= maxh else (maxh * ar, maxh)
-        bw, bh = int(bw), int(bh)
-        ph = raw.convert("RGB").resize((bw * s, bh * s), Image.LANCZOS)
+    # cartão da logo
+    cw, ch = 820, 400
+    x0, y0 = (W - cw) // 2, 60
+    box = [x0 * s, y0 * s, (x0 + cw) * s, (y0 + ch) * s]
+    _shadow(im, box, 44 * s, s)
+    d = ImageDraw.Draw(im)
+    d.rounded_rectangle(box, 44 * s, fill="white")
+    if complex_bg:
+        ph = _fit(raw.convert("RGB"), (cw - 24) * s, (ch - 24) * s, cover=True)
         m = Image.new("L", ph.size, 0)
-        ImageDraw.Draw(m).rounded_rectangle([0, 0, ph.width - 1, ph.height - 1], 28 * s, fill=255)
-        x0, y0 = (cx - bw // 2) * s, (cy - bh // 2) * s
-        im.paste(ph, (x0, y0), m)
-        d.rounded_rectangle([x0, y0, x0 + ph.width, y0 + ph.height], 28 * s, outline=INK, width=4 * s)
+        ImageDraw.Draw(m).rounded_rectangle([0, 0, ph.width - 1, ph.height - 1], 34 * s, fill=255)
+        im.paste(ph, ((x0 + 12) * s, (y0 + 12) * s), m)
     else:
-        d.ellipse([(cx - r) * s, (cy - r) * s, (cx + r) * s, (cy + r) * s], fill=circle_fill, outline=INK, width=4 * s)
-    if wide:
-        pass
-    elif complex_bg:  # foto: recorte circular cobrindo o círculo
-        side = min(raw.size)
-        sq = raw.crop(((raw.width - side) // 2, (raw.height - side) // 2, (raw.width + side) // 2, (raw.height + side) // 2))
-        sq = sq.resize((2 * (r - 4) * s, 2 * (r - 4) * s), Image.LANCZOS)
-        m = Image.new("L", sq.size, 0)
-        ImageDraw.Draw(m).ellipse([0, 0, sq.width - 1, sq.height - 1], fill=255)
-        im.paste(sq.convert("RGB"), ((cx - r + 4) * s, (cy - r + 4) * s), m)
-    else:
-        box = int(2 * r * 0.70) * s
-        lg = logo.copy()
-        lg.thumbnail((box, box), Image.LANCZOS)
-        if max(lg.size) < box:  # amplia logos pequenas
-            k = box / max(lg.size)
-            lg = lg.resize((int(lg.width * k), int(lg.height * k)), Image.LANCZOS)
-        im.paste(lg, (cx * s - lg.width // 2, cy * s - lg.height // 2), lg)
+        bgcard = (35, 35, 40) if lum(np.array(logo)[np.array(logo)[..., 3] > 200][:, :3].mean(0)) > 215 else None
+        if bgcard:
+            d.rounded_rectangle(box, 44 * s, fill=bgcard)
+        lg = _fit(logo, (cw - 120) * s, (ch - 90) * s)
+        im.paste(lg, ((W * s - lg.width) // 2, (y0 + ch // 2) * s - lg.height // 2), lg)
+    d = ImageDraw.Draw(im)
 
-    y = 470
+    # nome
+    y = y0 + ch + 40
     if nome:
-        f = font("Bold", 44)
-        txt = nome.upper()[:28]
-        while d.textlength(txt, font=f) > 860 * s and f.size > 24 * s:
+        f = font("Bold", 58)
+        t = nome.upper()[:30]
+        while d.textlength(t, font=f) > 880 * s and f.size > 26 * s:
             f = ImageFont.truetype(A("Poppins-Bold.ttf"), f.size - 2 * s)
-        tw = d.textlength(txt, font=f)
-        d.text((W * s / 2 - tw / 2, (y - 30) * s), txt, font=f, fill=INK)
+        d.text((Wp / 2 - d.textlength(t, font=f) / 2, y * s), t, font=f, fill=txt)
+        y += 90
+    else:
+        y += 20
 
-    # NFC
-    ncx, ncy, nr = 500, 665, 100
-    d.ellipse([(ncx - nr) * s, (ncy - nr) * s, (ncx + nr) * s, (ncy + nr) * s], outline=INK, width=4 * s)
-    d.rounded_rectangle([(ncx + 6) * s, (ncy - 62) * s, (ncx + 64) * s, (ncy + 62) * s], 12 * s, outline=INK, width=4 * s)
-    d.line([(ncx + 26) * s, (ncy - 50) * s, (ncx + 44) * s, (ncy - 50) * s], fill=INK, width=4 * s)
-    for rr in (18, 36, 54):
-        d.arc([(ncx - 14 - rr) * s, (ncy - rr) * s, (ncx - 14 + rr) * s, (ncy + rr) * s], 140, 220, fill=INK, width=5 * s)
-    f = font("Regular", 40)
-    t = "Aproxime o celular"
-    d.text((W * s / 2 - d.textlength(t, font=f) / 2, 780 * s), t, font=f, fill=INK)
+    # cartão branco de baixo
+    by0, by1 = y + 10, H - 50
+    box2 = [60 * s, by0 * s, (W - 60) * s, by1 * s]
+    _shadow(im, box2, 48 * s, s, strength=60)
+    d = ImageDraw.Draw(im)
+    d.rounded_rectangle(box2, 48 * s, fill="white")
 
-    _icons(d, 500, 880, 170, INK)
+    # faixa NFC
+    ny = by0 + 70
+    nr = 46
+    d.ellipse([(170 - nr) * s, (ny - nr) * s, (170 + nr) * s, (ny + nr) * s], fill=accent)
+    wc = (255, 255, 255)
+    d.rounded_rectangle([(176) * s, (ny - 28) * s, (200) * s, (ny + 28) * s], 6 * s, outline=wc, width=4 * s)
+    for rr in (10, 20, 30):
+        d.arc([(166 - rr) * s, (ny - rr) * s, (166 + rr) * s, (ny + rr) * s], 140, 220, fill=wc, width=4 * s)
+    f1 = font("Bold", 40)
+    f2 = font("Regular", 26)
+    d.text((240 * s, (ny - 44) * s), "Aproxime o celular", font=f1, fill=(30, 32, 40))
+    d.text((240 * s, (ny + 6) * s), "ou escaneie o QR Code abaixo", font=f2, fill=(110, 112, 120))
+
+    # ícones
+    iy = ny + 140
+    labels = ["Avalie", "Wi-Fi", "Instagram", "WhatsApp", "Pix"]
+    fl = font("Medium", 22)
+    gap = 160
+    for i, lab in enumerate(labels):
+        x = 500 + (i - 2) * gap
+        r = 44
+        d.ellipse([(x - r) * s, (iy - r) * s, (x + r) * s, (iy + r) * s], fill=mix(accent, (255, 255, 255), 0.88))
+        _glyph(d, i, x * s, iy * s, s, accent)
+        d.text((x * s - d.textlength(lab, font=fl) / 2, (iy + r + 10) * s), lab, font=fl, fill=(60, 62, 70))
 
     # QR
-    qs, qy = 344, 990
-    d.rounded_rectangle([(500 - qs // 2) * s, qy * s, (500 + qs // 2) * s, (qy + qs) * s], 26 * s, fill="white", outline=INK, width=4 * s)
-    qr = Image.open(A("qr.png")).convert("RGB").resize(((qs - 64) * s, (qs - 64) * s), Image.NEAREST)
-    im.paste(qr, ((500 - qs // 2 + 32) * s, (qy + 32) * s))
-    f = font("Bold", 38)
+    avail = by1 - (iy + 105) - 90
+    qs = int(min(400, avail))
+    qy = iy + 105 + max(0, (avail - qs) // 2)
+    qx = 500 - qs // 2
+    d.rounded_rectangle([qx * s, qy * s, (qx + qs) * s, (qy + qs) * s], 30 * s, fill="white", outline=accent, width=6 * s)
+    qr = Image.open(A("qr.png")).convert("RGB").resize(((qs - 60) * s, (qs - 60) * s), Image.NEAREST)
+    im.paste(qr, ((qx + 30) * s, (qy + 30) * s))
+    f = font("Bold", 32)
     t = "Escaneie o QR Code"
-    d.text((W * s / 2 - d.textlength(t, font=f) / 2, (qy + qs + 26) * s), t, font=f, fill=INK)
+    d.text((Wp / 2 - d.textlength(t, font=f) / 2, (qy + qs + 18) * s), t, font=f, fill=(30, 32, 40))
 
     return im.resize((W, H), Image.LANCZOS)
 
