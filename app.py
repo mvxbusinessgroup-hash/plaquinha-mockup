@@ -23,7 +23,7 @@ OUT = os.environ.get("OUT_DIR", "/tmp/out")
 os.makedirs(OUT, exist_ok=True)
 API_KEY = os.environ.get("API_KEY", "")          # opcional: exige ?key= no webhook
 PUBLIC_URL = os.environ.get("PUBLIC_URL", "").rstrip("/")
-SHOW_NAME = os.environ.get("SHOW_NAME", "1") == "1"
+SHOW_NAME = os.environ.get("SHOW_NAME", "0") == "1"
 LAST = {"payload": None, "at": None, "result": None}
 
 app = FastAPI(title="Mockup Plaquinha NFC")
