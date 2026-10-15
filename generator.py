@@ -352,7 +352,12 @@ def _key_out(rgb, bg, base_alpha=None, t0=20, t1=60):
         for j in range(1, n):
             ar_ = st[j, cv2.CC_STAT_AREA]
             # risquinho/ícone solto (ex.: lápis do print) bem menor que o resto
-            if ar_ < 0.0025 * tot or (ar_ < 0.04 * tot and st[j, cv2.CC_STAT_HEIGHT] > 3 * st[j, cv2.CC_STAT_WIDTH] and ar_ < 0.1 * bigx and False):
+            y0, y1 = st[j, cv2.CC_STAT_TOP], st[j, cv2.CC_STAT_TOP] + st[j, cv2.CC_STAT_HEIGHT]
+            iso = ar_ < 0.03 * tot and not any(
+                k != j and st[k, cv2.CC_STAT_AREA] > 0.3 * ar_ and
+                st[k, cv2.CC_STAT_TOP] < y1 and st[k, cv2.CC_STAT_TOP] + st[k, cv2.CC_STAT_HEIGHT] > y0
+                for k in range(1, n))
+            if ar_ < 0.0025 * tot or iso:      # sujeirinha solta (fora de qualquer linha de texto/desenho)
                 out[..., 3][lab == j] = 0
     ys, xs = np.nonzero(out[..., 3] > 25)
     if len(xs) == 0:
