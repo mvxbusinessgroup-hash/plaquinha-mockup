@@ -120,58 +120,79 @@ def _fit(img, w, h, cover=False):
     return img
 
 
+def _fa_font(kind, size):
+    """Fonte de ícones Font Awesome (instalada via pip fontawesomefree). None se não existir."""
+    try:
+        import fontawesomefree
+        base = os.path.join(os.path.dirname(fontawesomefree.__file__), "static", "fontawesomefree", "webfonts")
+        return ImageFont.truetype(os.path.join(base, f"fa-{kind}.ttf"), size)
+    except Exception:
+        return None
+
+
 def _icon_row(d, cy, s, ink, bg):
     lw = 5 * s
     xs = [500 - 2 * 150, 500 - 150, 500, 500 + 150, 500 + 300]
-    # G (Google)
-    x = xs[0] * s; y = cy * s
-    f = ImageFont.truetype(A("Poppins-Bold.ttf"), 78 * s)
-    d.text((x, y + 4 * s), "G", font=f, fill=ink, anchor="mm")
+    y = cy * s
+    fb = _fa_font("brands-400", 66 * s)
+    # Google
+    x = xs[0] * s
+    if fb:
+        d.text((x, y), "\uf1a0", font=fb, fill=ink, anchor="mm")
+    else:
+        d.text((x, y + 4 * s), "G", font=ImageFont.truetype(A("Poppins-Bold.ttf"), 78 * s), fill=ink, anchor="mm")
     # Wi-Fi (selo)
     x = xs[1] * s
-    d.rounded_rectangle([x - 52 * s, y - 26 * s, x + 52 * s, y + 26 * s], 26 * s, outline=ink, width=lw)
-    f2 = ImageFont.truetype(A("Poppins-Bold.ttf"), 30 * s)
-    d.text((x, y + 2 * s), "WiFi", font=f2, fill=ink, anchor="mm")
+    d.rounded_rectangle([x - 54 * s, y - 27 * s, x + 54 * s, y + 27 * s], 27 * s, outline=ink, width=lw)
+    d.text((x, y + 2 * s), "WiFi", font=ImageFont.truetype(A("Poppins-Bold.ttf"), 30 * s), fill=ink, anchor="mm")
     # Pix
     x = xs[2] * s
-    for dx, dy in ((0, -17), (17, 0), (0, 17), (-17, 0)):
-        cx, cy2 = x + dx * s, y + dy * s
-        r = 13 * s
-        d.polygon([(cx, cy2 - r), (cx + r, cy2), (cx, cy2 + r), (cx - r, cy2)], fill=ink)
+    if fb and fb.getbbox("\ue43a")[2] > 0:
+        d.text((x, y), "\ue43a", font=fb, fill=ink, anchor="mm")
+    else:
+        for dx, dy in ((0, -17), (17, 0), (0, 17), (-17, 0)):
+            c2x, c2y = x + dx * s, y + dy * s
+            r = 13 * s
+            d.polygon([(c2x, c2y - r), (c2x + r, c2y), (c2x, c2y + r), (c2x - r, c2y)], fill=ink)
     # Instagram
     x = xs[3] * s
-    d.rounded_rectangle([x - 32 * s, y - 32 * s, x + 32 * s, y + 32 * s], 16 * s, outline=ink, width=lw)
-    d.ellipse([x - 14 * s, y - 14 * s, x + 14 * s, y + 14 * s], outline=ink, width=lw)
-    d.ellipse([x + 15 * s, y - 23 * s, x + 23 * s, y - 15 * s], fill=ink)
+    if fb:
+        d.text((x, y), "\uf16d", font=fb, fill=ink, anchor="mm")
+    else:
+        d.rounded_rectangle([x - 32 * s, y - 32 * s, x + 32 * s, y + 32 * s], 16 * s, outline=ink, width=lw)
+        d.ellipse([x - 14 * s, y - 14 * s, x + 14 * s, y + 14 * s], outline=ink, width=lw)
+        d.ellipse([x + 15 * s, y - 23 * s, x + 23 * s, y - 15 * s], fill=ink)
     # WhatsApp
     x = xs[4] * s
-    d.ellipse([x - 31 * s, y - 31 * s, x + 31 * s, y + 29 * s], outline=ink, width=lw)
-    d.polygon([(x - 25 * s, y + 12 * s), (x - 34 * s, y + 36 * s), (x - 9 * s, y + 26 * s)], fill=ink)
-    d.polygon([(x - 22 * s, y + 13 * s), (x - 27 * s, y + 27 * s), (x - 12 * s, y + 21 * s)], fill=bg)
-    d.rounded_rectangle([x - 14 * s, y - 15 * s, x - 6 * s, y + 0 * s], 4 * s, fill=ink)
-    d.line([(x - 10 * s, y - 2 * s), (x + 8 * s, y + 12 * s)], fill=ink, width=7 * s)
-    d.rounded_rectangle([x + 4 * s, y + 6 * s, x + 16 * s, y + 14 * s], 4 * s, fill=ink)
+    if fb:
+        d.text((x, y), "\uf232", font=fb, fill=ink, anchor="mm")
+    else:
+        d.ellipse([x - 31 * s, y - 31 * s, x + 31 * s, y + 29 * s], outline=ink, width=lw)
+        d.polygon([(x - 25 * s, y + 12 * s), (x - 34 * s, y + 36 * s), (x - 9 * s, y + 26 * s)], fill=ink)
 
 
 def _nfc_art(d, cx, cy, s, ink, bg):
-    lw = 6 * s
-    # oval do terminal com ondas
-    ex0, ey0, ex1, ey1 = cx - 190, cy - 90, cx + 60, cy + 70
-    d.ellipse([ex0 * s, ey0 * s, ex1 * s, ey1 * s], outline=ink, width=lw)
-    wx, wy = cx - 95, cy - 10
-    for rr in (16, 32, 48):
-        d.arc([(wx - rr) * s, (wy - rr) * s, (wx + rr) * s, (wy + rr) * s], -50, 50, fill=ink, width=lw)
-    # mão (palma) atrás do celular
-    px0, py0, px1, py1 = cx + 5, cy - 115, cx + 115, cy + 95
-    d.rounded_rectangle([(px0 - 10) * s, (cy + 20) * s, (px1 + 28) * s, (cy + 150) * s], 46 * s, fill=bg, outline=ink, width=lw)
+    lw = 7 * s
+    S = lambda *p: [v * s for v in p]
+    # leitor (oval) com ondas
+    d.ellipse(S(cx - 215, cy - 95, cx + 35, cy + 75), outline=ink, width=lw)
+    wx, wy = cx - 120, cy - 10
+    for rr in (18, 36, 54):
+        d.arc(S(wx - rr, wy - rr, wx + rr, wy + rr), -48, 48, fill=ink, width=lw)
+    # palma/punho atrás do celular
+    d.rounded_rectangle(S(cx - 25, cy + 30, cx + 135, cy + 150), 50 * s, fill=bg, outline=ink, width=lw)
+    d.rectangle(S(cx + 22, cy + 140, cx + 120, cy + 185), fill=bg)
+    d.line(S(cx + 22, cy + 138, cx + 22, cy + 185), fill=ink, width=lw)
+    d.line(S(cx + 120, cy + 138, cx + 120, cy + 185), fill=ink, width=lw)
     # celular
-    d.rounded_rectangle([px0 * s, py0 * s, px1 * s, py1 * s], 20 * s, fill=bg, outline=ink, width=lw)
-    d.line([((px0 + px1) / 2 - 16) * s, (py0 + 14) * s, ((px0 + px1) / 2 + 16) * s, (py0 + 14) * s], fill=ink, width=4 * s)
-    # dedos
-    for fy in (cy - 5, cy + 28, cy + 61):
-        d.rounded_rectangle([(px0 - 36) * s, fy * s, (px0 + 22) * s, (fy + 30) * s], 15 * s, fill=bg, outline=ink, width=lw)
-    # polegar
-    d.rounded_rectangle([(px1 - 14) * s, (cy - 20) * s, (px1 + 18) * s, (cy + 50) * s], 16 * s, fill=bg, outline=ink, width=lw)
+    px0, py0, px1, py1 = cx - 5, cy - 135, cx + 110, cy + 95
+    d.rounded_rectangle(S(px0, py0, px1, py1), 22 * s, fill=bg, outline=ink, width=lw)
+    d.rounded_rectangle(S((px0 + px1) / 2 - 18, py0 + 12, (px0 + px1) / 2 + 18, py0 + 19), 4 * s, fill=ink)
+    # dedos envolvendo o lado esquerdo
+    for fy in (cy - 15, cy + 20, cy + 55):
+        d.rounded_rectangle(S(px0 - 42, fy, px0 + 26, fy + 32), 16 * s, fill=bg, outline=ink, width=lw)
+    # polegar no lado direito
+    d.rounded_rectangle(S(px1 - 16, cy - 40, px1 + 20, cy + 45), 18 * s, fill=bg, outline=ink, width=lw)
 
 
 def make_design(logo_src, nome=None):
@@ -256,7 +277,7 @@ def make_design(logo_src, nome=None):
     d = ImageDraw.Draw(im)
 
     # arte NFC
-    _nfc_art(d, 520, 580, s, ink, base if not dark else mix(base, accent, 0.0))
+    _nfc_art(d, 520, 560, s, ink, base if not dark else mix(base, accent, 0.0))
 
     # Aproxime o celular
     fb = font("Bold", 46)
