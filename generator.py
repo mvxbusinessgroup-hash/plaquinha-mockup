@@ -391,7 +391,9 @@ def integrate_logo(raw, main):
             tot = max(1, fg.sum())
             for j in range(1, n):
                 if st[j, cv2.CC_STAT_AREA] < 0.06 * tot and np.hypot(ce[j][0] - ww / 2, ce[j][1] - hh / 2) > 0.62 * R:
-                    m[lab == j] = 0
+                    cpx = ba[..., :3][(lab == j) & (fg > 0)].astype(np.int16)
+                    if len(cpx) and (cpx.max(1) - cpx.min(1)).mean() < 50 and cpx.mean() < 110:   # só ícone cinza/escuro
+                        m[lab == j] = 0
             lg = _key_out(ba[..., :3], bg, m)
             if lg is not None:
                 return lg, bg, "key"
