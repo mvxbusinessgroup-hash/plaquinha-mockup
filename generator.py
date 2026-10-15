@@ -212,10 +212,10 @@ def nfc_mask(scale=4):
 
 
 
-def _nfc_art(im, cx, cy, s, ink, bg=None):
+def _nfc_art(im, cx, cy, s, ink, bg=None, width=470):
     """Ícone 'aproxime o celular' no mesmo estilo das plaquinhas do Marcos."""
     m = nfc_mask(3)
-    w = int(470 * s)
+    w = int(width * s)
     h = int(m.height * w / m.width)
     m = m.resize((w, h), Image.LANCZOS)
     im.paste(ink, (int(cx * s - w / 2), int(cy * s - h / 2)), m)
@@ -313,7 +313,7 @@ def _tools_pattern(Wp, Hp, s):
     # posições (x, y, tamanho, rot, tipo) — mais nas bordas, como na arte de referência
     spots = [(-30, 40, 300, 10, 0), (880, -20, 260, 0, 4), (930, 420, 230, 15, 1), (-60, 520, 250, -20, 2),
              (40, 980, 220, 30, 3), (900, 900, 280, -10, 0), (-40, 1330, 300, 0, 4), (860, 1300, 260, 20, 2),
-             (330, -70, 160, 0, 3), (650, 1450, 180, 0, 1)]
+             (650, 1450, 180, 0, 1)]
     out = Image.new("L", (Wp, Hp), 0)
     for x, y, sz, rot, t in spots:
         r = makers[t]()
@@ -324,6 +324,101 @@ def _tools_pattern(Wp, Hp, s):
         o = o.rotate(rot, resample=Image.BICUBIC).resize((sz * s, sz * s), Image.LANCZOS)
         out.paste(255, (x * s - sz * s // 2 + sz * s // 2 - sz * s // 2, y * s - sz * s // 2 + sz * s // 2 - sz * s // 2), o)
     return out
+
+
+def _dominant(px):
+    q = (px // 16).astype(np.int32)
+    key = q[:, 0] * 256 + q[:, 1] * 16 + q[:, 2]
+    b = np.bincount(key).argmax()
+    return tuple(int(v) for v in px[key == b].mean(0))
+
+
+def _key_out(rgb, bg, base_alpha=None, t0=20, t1=60):
+    """Remove a cor de fundo com borda suave e 'descontamina' a cor das bordas."""
+    f = rgb.astype(np.float32)
+    B = np.array(bg, np.float32)
+    dist = np.sqrt(((f - B) ** 2).sum(2))
+    a = np.clip((dist - t0) / (t1 - t0), 0, 1)
+    if base_alpha is not None:
+        a = a * (base_alpha.astype(np.float32) / 255)
+    aa = np.maximum(a, 1e-3)[..., None]
+    F = np.clip((f - (1 - aa) * B) / aa, 0, 255)
+    out = np.dstack([F, a * 255]).astype(np.uint8)
+    on = (out[..., 3] > 60).astype(np.uint8)
+    n, lab, st, _ = cv2.connectedComponentsWithStats(cv2.dilate(on, np.ones((5, 5), np.uint8)))
+    if n > 2:
+        tot = st[1:, cv2.CC_STAT_AREA].sum()
+        bigx = st[1:, cv2.CC_STAT_AREA].max()
+        for j in range(1, n):
+            ar_ = st[j, cv2.CC_STAT_AREA]
+            # risquinho/ícone solto (ex.: lápis do print) bem menor que o resto
+            if ar_ < 0.0025 * tot or (ar_ < 0.04 * tot and st[j, cv2.CC_STAT_HEIGHT] > 3 * st[j, cv2.CC_STAT_WIDTH] and ar_ < 0.1 * bigx and False):
+                out[..., 3][lab == j] = 0
+    ys, xs = np.nonzero(out[..., 3] > 25)
+    if len(xs) == 0:
+        return None
+    return Image.fromarray(out[ys.min():ys.max() + 1, xs.min():xs.max() + 1], "RGBA")
+
+
+def integrate_logo(raw, main):
+    """Tira o fundo da logo para ela ficar 'impressa' direto na plaquinha.
+    Retorna (logo_RGBA, cor_do_fundo_original|None, tipo)."""
+    a = np.array(raw.convert("RGBA"))
+    if (a[..., 3] < 250).mean() > 0.02:                # já é PNG sem fundo
+        lg, _ = clean_logo(raw)
+        return lg, None, "png"
+    rgb = a[..., :3]
+    h, w = rgb.shape[:2]
+    border = np.concatenate([rgb[0], rgb[-1], rgb[:, 0], rgb[:, -1]]).astype(np.int16)
+    bmed = np.median(border, axis=0)
+    flat = np.abs(border - bmed).sum(1).mean() <= 45
+    def badge_key(img):
+        badge = extract_badge(img, main)
+        if badge is None:
+            return None
+        ba = np.array(badge)
+        inside = ba[..., :3][ba[..., 3] > 200]
+        bg = _dominant(inside)
+        frac = (np.sqrt(((inside.astype(np.float32) - bg) ** 2).sum(1)) < 30).mean()
+        if frac > 0.35:
+            m = cv2.erode(ba[..., 3].copy(), np.ones((9, 9), np.uint8))
+            # tira restos pequenos perto da borda do círculo (ícone de lápis, sombra etc.)
+            dd = np.sqrt(((ba[..., :3].astype(np.float32) - bg) ** 2).sum(2))
+            fg = ((dd > 40) & (m > 128)).astype(np.uint8)
+            n, lab, st, ce = cv2.connectedComponentsWithStats(cv2.dilate(fg, np.ones((5, 5), np.uint8)))
+            hh, ww = m.shape
+            R = min(hh, ww) / 2
+            tot = max(1, fg.sum())
+            for j in range(1, n):
+                if st[j, cv2.CC_STAT_AREA] < 0.06 * tot and np.hypot(ce[j][0] - ww / 2, ce[j][1] - hh / 2) > 0.62 * R:
+                    m[lab == j] = 0
+            lg = _key_out(ba[..., :3], bg, m)
+            if lg is not None:
+                return lg, bg, "key"
+        return badge, None, "badge"
+
+    # 1) fundo liso (branco, preto ou colorido)
+    if flat:
+        bg = tuple(int(v) for v in bmed)
+        lg = _key_out(rgb, bg)
+        if lg is not None:
+            # sobrou só um círculo de cor única (foto de perfil)? então a plaquinha vira a cor do círculo
+            la = np.array(lg)[..., 3]
+            cnts, _ = cv2.findContours((la > 128).astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            if cnts:
+                c = max(cnts, key=cv2.contourArea)
+                (_, _), r = cv2.minEnclosingCircle(c)
+                if sum(1 for o in cnts if o is not c and cv2.contourArea(o) > 0.004 * cv2.contourArea(c)) == 0 and cv2.contourArea(c) / (np.pi * r * r) > 0.8:
+                    bk = badge_key(raw)
+                    if bk is not None and bk[2] == "key":
+                        return bk
+            return lg, bg, "key"
+    # 2) print/foto com logo redonda
+    bk = badge_key(raw)
+    if bk is not None:
+        return bk
+    # 3) foto
+    return raw, None, "photo"
 
 
 def make_design(logo_src, nome=None):
@@ -341,10 +436,13 @@ def make_design(logo_src, nome=None):
     s = SS
     Wp, Hp = W * s, H * s
 
-    # ---- cor da plaquinha combinando com a logo
-    if opaque and not complex_bg and lum(bmed) < 200 and (max(bmed) - min(bmed) > 40 or lum(bmed) < 60):
-        base = bmed                      # mesmo fundo (colorido/escuro) da logo: integra perfeito
-    elif vivid and lum(main) > 150:      # cores claras (amarelo, laranja claro): fundo preto com brilho da cor
+    # ---- cor da plaquinha = cor do fundo da logo (assim a logo fica integrada)
+    lg_int, lbg, lkind = integrate_logo(raw, main)
+    if lbg is not None and lum(lbg) > 215 and (max(lbg) - min(lbg)) < 30:
+        base = mix(lbg, main, 0.07) if vivid else lbg       # logo em fundo branco: plaquinha clara
+    elif lbg is not None:
+        base = lbg                                          # fundo colorido/escuro: plaquinha na mesma cor
+    elif vivid and lum(main) > 150:
         base = mix((14, 14, 16), main, 0.06)
     elif vivid:
         base = shade(main, 0.62)
@@ -362,17 +460,28 @@ def make_design(logo_src, nome=None):
     g = np.linspace(0, 1, Hp)[:, None, None]
     arr = (np.array(top)[None, None, :] * (1 - g) + np.array(bot)[None, None, :] * g).repeat(Wp, axis=1)
     im = Image.fromarray(np.clip(arr, 0, 255).astype(np.uint8), "RGB").convert("RGBA")
-    pat = _tools_pattern(Wp, Hp, s)
-    pc = accent if (accent != ink and dark) else ink
-    layer = Image.new("RGBA", im.size, pc + (0,))
-    layer.putalpha(pat.point(lambda v: int(v * (0.16 if dark else 0.11))))
+    # círculos decorativos nos cantos (igual às primeiras prévias)
+    light = lum(base) > 200
+    if light:
+        c1 = main if vivid else mix(main, (120, 120, 120), 0.3)
+        c2 = sec or mix(c1, (255, 255, 255), 0.45)
+    else:
+        c1 = sec if (sec and abs(lum(sec) - lum(base)) > 40) else (shade(base, 0.72) if lum(base) > 90 else mix(base, (255, 255, 255), 0.18))
+        c2 = mix(c1, base, 0.5)
+    layer = Image.new("RGBA", im.size, (0, 0, 0, 0))
+    ld = ImageDraw.Draw(layer)
+    def circ(cx, cy, r, col, a):
+        ld.ellipse([(cx - r) * s, (cy - r) * s, (cx + r) * s, (cy + r) * s], fill=col + (a,))
+    circ(1010, 20, 300, c2, 150)
+    circ(960, -40, 250, c1, 255)
+    circ(-10, 1480, 250, c2, 150)
+    circ(40, 1530, 210, c1, 255)
     im = Image.alpha_composite(im, layer).convert("RGB")
     d = ImageDraw.Draw(im)
 
-    # ---- logo integrada: selo/cartão com sombra suave
-    lcx, lcy = 500, 215
-    sq = 0.8 <= raw.width / raw.height <= 1.25
-    badge = extract_badge(raw, main) if (complex_bg or (opaque and lum(bmed) < 70 and sq)) else None
+    # ---- logo integrada (sem fundo)
+    lcx, lcy = 500, 210
+    badge = lg_int if lkind == "badge" else None
 
     def shadow(box, radius, ellipse=False):
         nonlocal im
@@ -384,7 +493,12 @@ def make_design(logo_src, nome=None):
         sh = sh.filter(ImageFilter.GaussianBlur(14 * s / 4)).resize(im.size, Image.BILINEAR)
         im.paste((0, 0, 0), (0, 0), sh)
 
-    if badge is not None:
+    if lkind == "key":
+        ar = lg_int.width / lg_int.height
+        bw, bh = (480, 270) if ar > 1.3 else (340, 290)
+        lg = _fit(lg_int, bw * s, bh * s)
+        im.paste(lg, (lcx * s - lg.width // 2, lcy * s - lg.height // 2), lg)
+    elif badge is not None:
         dia = 300
         lg = _fit(badge, dia * s, dia * s)
         box = [lcx * s - lg.width // 2, lcy * s - lg.height // 2, lcx * s + lg.width // 2, lcy * s + lg.height // 2]
@@ -392,7 +506,7 @@ def make_design(logo_src, nome=None):
         ring = 8 * s
         ImageDraw.Draw(im).ellipse([box[0] - ring, box[1] - ring, box[2] + ring, box[3] + ring], fill=(255, 255, 255))
         im.paste(lg, (box[0], box[1]), lg)
-    elif complex_bg:
+    elif lkind == "photo":
         ar = raw.width / raw.height
         if 0.8 <= ar <= 1.25:
             dia = 300
@@ -414,8 +528,8 @@ def make_design(logo_src, nome=None):
             ImageDraw.Draw(m).rounded_rectangle([0, 0, ph.width - 1, ph.height - 1], 30 * s, fill=255)
             im.paste(ph, (box[0], box[1]), m)
     else:
-        lg = _fit(logo, 380 * s, 200 * s)
-        if dark:  # logo em cartão branco arredondado (fica limpa e legível)
+        lg = _fit(lg_int, 420 * s, 240 * s)
+        if False:  # logo em cartão branco arredondado (fica limpa e legível)
             pw, ph_ = lg.width + 90 * s, lg.height + 70 * s
             box = [lcx * s - pw // 2, lcy * s - ph_ // 2, lcx * s + pw // 2, lcy * s + ph_ // 2]
             shadow(box, 40 * s)
@@ -424,7 +538,9 @@ def make_design(logo_src, nome=None):
     d = ImageDraw.Draw(im)
 
     # arte NFC
-    _nfc_art(im, 500, 600, s, ink)
+    d = ImageDraw.Draw(im)
+    d.ellipse([(500 - 165) * s, (585 - 165) * s, (500 + 165) * s, (585 + 165) * s], outline=ink, width=6 * s)
+    _nfc_art(im, 500, 590, s, ink, width=270)
     d = ImageDraw.Draw(im)
 
     # Aproxime o celular
@@ -436,10 +552,13 @@ def make_design(logo_src, nome=None):
     d.text((x0, 830 * s), t1, font=fb, fill=ink, anchor="lm")
     d.text((x0 + w1, 830 * s), t2, font=fr, fill=ink, anchor="lm")
 
-    _icon_row(d, 945, s, ink, base)
+    _icon_row(d, 935, s, ink, base)
+    fl = font("Medium", 22)
+    for i, lab in enumerate(["Avalie", "Wi-Fi", "Pix", "Instagram", "WhatsApp"]):
+        d.text(((200 + 150 * i) * s, 995 * s), lab, font=fl, fill=ink, anchor="mm")
 
     # QR
-    qs, qy = 370, 1030
+    qs, qy = 340, 1040
     qx = 500 - qs // 2
     d.rounded_rectangle([qx * s, qy * s, (qx + qs) * s, (qy + qs) * s], 34 * s, fill="white", outline=(None if dark else ink), width=(0 if dark else 3 * s))
     qr = Image.open(A("qr.png")).convert("RGB").resize(((qs - 64) * s, (qs - 64) * s), Image.NEAREST)
