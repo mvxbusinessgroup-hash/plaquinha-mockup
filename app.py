@@ -8,6 +8,7 @@ Rotas:
   GET  /debug/last     -> último payload recebido do ZapData (precisa de ?key=)
 """
 import json
+import threading
 import os
 import re
 import time
@@ -53,7 +54,7 @@ def walk(obj, path=""):
 def is_image(url: str) -> bool:
     try:
         req = urllib.request.Request(url, method="GET", headers={"User-Agent": "PlaquinhaMockup/1.0 (mockup generator)"})
-        with urllib.request.urlopen(req, timeout=10) as r:
+        with urllib.request.urlopen(req, timeout=6) as r:
             ct = r.headers.get("Content-Type", "")
             head = r.read(16)
         return ct.startswith("image/") or head[:3] == b"\xff\xd8\xff" or head[:8] == b"\x89PNG\r\n\x1a\n" or head[:4] == b"RIFF"
@@ -87,13 +88,28 @@ def find_name(payload):
     return None
 
 
-def render(src, nome, request):
-    mock, arte = generator.generate(src, nome if SHOW_NAME else None)
+def _do_render(src, nome, fid):
+    try:
+        mock, arte = generator.generate(src, nome if SHOW_NAME else None)
+        open(os.path.join(OUT, f"{fid}_arte.png"), "wb").write(arte)
+        tmp = os.path.join(OUT, f"{fid}.tmp")
+        open(tmp, "wb").write(mock)
+        os.replace(tmp, os.path.join(OUT, f"{fid}.jpg"))
+    except Exception as e:
+        open(os.path.join(OUT, f"{fid}.err"), "w").write(str(e)[:300])
+
+
+def render(src, nome, request, background=False):
     fid = uuid.uuid4().hex[:12]
-    open(os.path.join(OUT, f"{fid}.jpg"), "wb").write(mock)
-    open(os.path.join(OUT, f"{fid}_arte.png"), "wb").write(arte)
     b = base_url(request)
-    return {"ok": True, "url": f"{b}/img/{fid}.jpg", "arte_url": f"{b}/img/{fid}_arte.png"}
+    res = {"ok": True, "url": f"{b}/img/{fid}.jpg", "arte_url": f"{b}/img/{fid}_arte.png"}
+    if background:   # responde na hora (o ZapData tem timeout curto) e gera em paralelo
+        threading.Thread(target=_do_render, args=(src, nome, fid), daemon=True).start()
+    else:
+        _do_render(src, nome, fid)
+        if os.path.exists(os.path.join(OUT, f"{fid}.err")):
+            raise RuntimeError(open(os.path.join(OUT, f"{fid}.err")).read())
+    return res
 
 
 @app.post("/zapdata")
@@ -110,7 +126,7 @@ async def zapdata(request: Request):
         res = {"ok": False, "fonte": "nenhuma", "url": ""}
     else:
         try:
-            res = render(src, find_name(payload), request)
+            res = render(src, find_name(payload), request, background=True)
             res["fonte"] = fonte
         except Exception as e:  # logo inválida
             res = {"ok": False, "fonte": fonte, "erro": str(e)[:200], "url": ""}
@@ -153,6 +169,11 @@ def home():
 @app.get("/img/{name}")
 def img(name: str):
     path = os.path.join(OUT, os.path.basename(name))
+    fid = os.path.basename(name).split(".")[0].replace("_arte", "")
+    for _ in range(90):   # espera a geração em segundo plano (até ~45s)
+        if os.path.exists(path) or os.path.exists(os.path.join(OUT, f"{fid}.err")):
+            break
+        time.sleep(0.5)
     if not os.path.exists(path):
         return JSONResponse({"erro": "não encontrado"}, status_code=404)
     return FileResponse(path)
