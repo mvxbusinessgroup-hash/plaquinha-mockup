@@ -268,6 +268,64 @@ def extract_badge(raw, main):
     return Image.fromarray(out.astype(np.uint8), "RGBA")
 
 
+def _tools_pattern(Wp, Hp, s):
+    """Padrão de ferramentas em traço fino (estilo das folhas de milho/palmeira das plaquinhas)."""
+    def outline(m, w):
+        a = np.array(m)
+        er = cv2.erode(a, np.ones((w, w), np.uint8))
+        return Image.fromarray(((a > 127) & (er < 128)).astype(np.uint8) * 255)
+    def wrench():
+        m = Image.new("L", (400, 400), 0); d = ImageDraw.Draw(m)
+        d.rounded_rectangle([180, 90, 220, 330], 20, fill=255)
+        d.ellipse([130, 20, 270, 160], fill=255); d.ellipse([145, 290, 255, 400], fill=255)
+        d.rectangle([180, 10, 220, 85], fill=0); d.ellipse([170, 315, 230, 375], fill=0)
+        return m.rotate(40, resample=Image.BICUBIC)
+    def hammer():
+        m = Image.new("L", (400, 400), 0); d = ImageDraw.Draw(m)
+        d.rounded_rectangle([182, 120, 218, 390], 16, fill=255)
+        d.rounded_rectangle([90, 60, 300, 135], 14, fill=255)
+        d.polygon([(300, 70), (360, 40), (340, 100), (300, 125)], fill=255)
+        return m.rotate(-30, resample=Image.BICUBIC)
+    def screw():
+        m = Image.new("L", (400, 400), 0); d = ImageDraw.Draw(m)
+        d.rounded_rectangle([130, 40, 270, 90], 18, fill=255)
+        d.polygon([(165, 90), (235, 90), (235, 300), (200, 370), (165, 300)], fill=255)
+        o = outline(m, 9); d2 = ImageDraw.Draw(o)
+        for y in range(115, 300, 32):
+            d2.line([(165, y + 14), (235, y)], fill=255, width=8)
+        d2.line([(200, 50), (200, 80)], fill=255, width=8)
+        return o.rotate(25, resample=Image.BICUBIC), True
+    def nut():
+        m = Image.new("L", (400, 400), 0); d = ImageDraw.Draw(m)
+        pts = [(200 + 150 * np.cos(np.radians(a)), 200 + 150 * np.sin(np.radians(a))) for a in range(0, 360, 60)]
+        d.polygon(pts, fill=255); d.ellipse([130, 130, 270, 270], fill=0)
+        return m
+    def gear():
+        m = Image.new("L", (400, 400), 0); d = ImageDraw.Draw(m)
+        d.ellipse([70, 70, 330, 330], fill=255)
+        for a in range(0, 360, 40):
+            im2 = Image.new("L", (400, 400), 0)
+            ImageDraw.Draw(im2).rectangle([175, 20, 225, 90], fill=255)
+            m.paste(255, (0, 0), im2.rotate(a, resample=Image.BICUBIC))
+        d.ellipse([150, 150, 250, 250], fill=0)
+        return m
+    makers = [wrench, hammer, screw, nut, gear]
+    # posições (x, y, tamanho, rot, tipo) — mais nas bordas, como na arte de referência
+    spots = [(-30, 40, 300, 10, 0), (880, -20, 260, 0, 4), (930, 420, 230, 15, 1), (-60, 520, 250, -20, 2),
+             (40, 980, 220, 30, 3), (900, 900, 280, -10, 0), (-40, 1330, 300, 0, 4), (860, 1300, 260, 20, 2),
+             (330, -70, 160, 0, 3), (650, 1450, 180, 0, 1)]
+    out = Image.new("L", (Wp, Hp), 0)
+    for x, y, sz, rot, t in spots:
+        r = makers[t]()
+        if isinstance(r, tuple):
+            o = r[0]
+        else:
+            o = outline(r, 9)
+        o = o.rotate(rot, resample=Image.BICUBIC).resize((sz * s, sz * s), Image.LANCZOS)
+        out.paste(255, (x * s - sz * s // 2 + sz * s // 2 - sz * s // 2, y * s - sz * s // 2 + sz * s // 2 - sz * s // 2), o)
+    return out
+
+
 def make_design(logo_src, nome=None):
     raw = load_image(logo_src)
     logo, complex_bg = clean_logo(raw)
@@ -284,10 +342,8 @@ def make_design(logo_src, nome=None):
     Wp, Hp = W * s, H * s
 
     # ---- cor da plaquinha combinando com a logo
-    if opaque and not complex_bg:
-        base = bmed                      # mesmo fundo da logo: integra perfeito
-        if lum(base) > 200 and vivid:     # logo em fundo branco: plaquinha clara levemente tingida
-            base = mix(base, main, 0.07)
+    if opaque and not complex_bg and lum(bmed) < 200 and (max(bmed) - min(bmed) > 40 or lum(bmed) < 60):
+        base = bmed                      # mesmo fundo (colorido/escuro) da logo: integra perfeito
     elif vivid and lum(main) > 150:      # cores claras (amarelo, laranja claro): fundo preto com brilho da cor
         base = mix((14, 14, 16), main, 0.06)
     elif vivid:
@@ -300,57 +356,70 @@ def make_design(logo_src, nome=None):
     if abs(lum(accent) - lum(base)) < 45:   # destaque precisa aparecer no fundo
         accent = sec if (sec and abs(lum(sec) - lum(base)) >= 45) else ink
 
-    # fundo com degradê suave + brilho da cor da marca
-    top = mix(base, accent, 0.10) if dark else shade(base, 1.0)
-    bot = shade(base, 0.85) if dark else mix(base, (0, 0, 0), 0.06)
+    # fundo cor da marca (chapado, degradê bem leve) + padrão de ferramentas em traço
+    top = mix(base, (255, 255, 255), 0.06) if dark else base
+    bot = shade(base, 0.82) if dark else mix(base, (0, 0, 0), 0.05)
     g = np.linspace(0, 1, Hp)[:, None, None]
     arr = (np.array(top)[None, None, :] * (1 - g) + np.array(bot)[None, None, :] * g).repeat(Wp, axis=1)
     im = Image.fromarray(np.clip(arr, 0, 255).astype(np.uint8), "RGB").convert("RGBA")
-    from PIL import ImageFilter
-    glow = Image.new("RGBA", im.size, (0, 0, 0, 0))
-    gd = ImageDraw.Draw(glow)
-    if accent != ink:
-        ga = 70 if dark else 38
-        gd.ellipse([150 * s, -60 * s, 850 * s, 500 * s], fill=accent + (ga,))
-        gd.ellipse([600 * s, 1150 * s, 1200 * s, 1650 * s], fill=accent + (ga * 4 // 7,))
-        small = glow.resize((glow.width // 8, glow.height // 8), Image.BILINEAR).filter(ImageFilter.GaussianBlur(110 * s / 8))
-        glow = small.resize(glow.size, Image.BILINEAR)
-        im = Image.alpha_composite(im, glow)
-    ov = Image.new("RGBA", im.size, (0, 0, 0, 0))
-    od = ImageDraw.Draw(ov)
-    lc = accent if accent != ink else ink
-    for k in range(14):
-        r = 180 + k * 18
-        od.arc([(1000 - r) * s, (-r) * s, (1000 + r) * s, (r) * s], 90, 180, fill=lc + (60,), width=2 * s)
-        r2 = 140 + k * 18
-        od.arc([(-r2) * s, (1500 - r2) * s, (r2) * s, (1500 + r2) * s], 270, 360, fill=lc + (45,), width=2 * s)
-    im = Image.alpha_composite(im, ov).convert("RGB")
+    pat = _tools_pattern(Wp, Hp, s)
+    pc = accent if (accent != ink and dark) else ink
+    layer = Image.new("RGBA", im.size, pc + (0,))
+    layer.putalpha(pat.point(lambda v: int(v * (0.16 if dark else 0.11))))
+    im = Image.alpha_composite(im, layer).convert("RGB")
     d = ImageDraw.Draw(im)
 
-    # ---- logo integrada (sem fundo)
-    lcx, lcy = 500, 205
+    # ---- logo integrada: selo/cartão com sombra suave
+    lcx, lcy = 500, 215
     sq = 0.8 <= raw.width / raw.height <= 1.25
     badge = extract_badge(raw, main) if (complex_bg or (opaque and lum(bmed) < 70 and sq)) else None
+
+    def shadow(box, radius, ellipse=False):
+        nonlocal im
+        sh = Image.new("L", (im.width // 4, im.height // 4), 0)
+        sd = ImageDraw.Draw(sh)
+        b = [v / 4 for v in box]
+        b[1] += 6 * s / 4; b[3] += 10 * s / 4
+        (sd.ellipse(b, fill=110) if ellipse else sd.rounded_rectangle(b, radius / 4, fill=110))
+        sh = sh.filter(ImageFilter.GaussianBlur(14 * s / 4)).resize(im.size, Image.BILINEAR)
+        im.paste((0, 0, 0), (0, 0), sh)
+
     if badge is not None:
-        lg = _fit(badge, 250 * s, 250 * s)
-        im.paste(lg, (lcx * s - lg.width // 2, lcy * s - lg.height // 2), lg)
+        dia = 300
+        lg = _fit(badge, dia * s, dia * s)
+        box = [lcx * s - lg.width // 2, lcy * s - lg.height // 2, lcx * s + lg.width // 2, lcy * s + lg.height // 2]
+        shadow(box, 0, ellipse=True)
+        ring = 8 * s
+        ImageDraw.Draw(im).ellipse([box[0] - ring, box[1] - ring, box[2] + ring, box[3] + ring], fill=(255, 255, 255))
+        im.paste(lg, (box[0], box[1]), lg)
     elif complex_bg:
         ar = raw.width / raw.height
         if 0.8 <= ar <= 1.25:
-            dia = 290
-            sq = _fit(raw.convert("RGB"), dia * s, dia * s, cover=True)
-            m = Image.new("L", sq.size, 0)
-            ImageDraw.Draw(m).ellipse([0, 0, sq.width - 1, sq.height - 1], fill=255)
-            m = m.filter(ImageFilter.GaussianBlur(2 * s))
-            im.paste(sq, ((lcx - dia // 2) * s, (lcy - dia // 2) * s), m)
+            dia = 300
+            ph = _fit(raw.convert("RGB"), dia * s, dia * s, cover=True)
+            box = [(lcx - dia // 2) * s, (lcy - dia // 2) * s, (lcx + dia // 2) * s, (lcy + dia // 2) * s]
+            shadow(box, 0, ellipse=True)
+            ring = 8 * s
+            ImageDraw.Draw(im).ellipse([box[0] - ring, box[1] - ring, box[2] + ring, box[3] + ring], fill=(255, 255, 255))
+            m = Image.new("L", ph.size, 0)
+            ImageDraw.Draw(m).ellipse([0, 0, ph.width - 1, ph.height - 1], fill=255)
+            im.paste(ph, (box[0], box[1]), m)
         else:
-            cw, ch = 540, 270
+            cw, ch = 560, 280
             ph = _fit(raw.convert("RGB"), cw * s, ch * s, cover=True)
+            box = [(lcx - cw // 2) * s, (lcy - ch // 2) * s, (lcx + cw // 2) * s, (lcy + ch // 2) * s]
+            shadow(box, 30 * s)
+            ImageDraw.Draw(im).rounded_rectangle([box[0] - 7 * s, box[1] - 7 * s, box[2] + 7 * s, box[3] + 7 * s], 36 * s, fill=(255, 255, 255))
             m = Image.new("L", ph.size, 0)
             ImageDraw.Draw(m).rounded_rectangle([0, 0, ph.width - 1, ph.height - 1], 30 * s, fill=255)
-            im.paste(ph, ((lcx - cw // 2) * s, (lcy - ch // 2) * s), m)
+            im.paste(ph, (box[0], box[1]), m)
     else:
-        lg = _fit(logo, 400 * s, 220 * s)
+        lg = _fit(logo, 380 * s, 200 * s)
+        if dark:  # logo em cartão branco arredondado (fica limpa e legível)
+            pw, ph_ = lg.width + 90 * s, lg.height + 70 * s
+            box = [lcx * s - pw // 2, lcy * s - ph_ // 2, lcx * s + pw // 2, lcy * s + ph_ // 2]
+            shadow(box, 40 * s)
+            ImageDraw.Draw(im).rounded_rectangle(box, 40 * s, fill=(255, 255, 255))
         im.paste(lg, (lcx * s - lg.width // 2, lcy * s - lg.height // 2), lg)
     d = ImageDraw.Draw(im)
 
@@ -364,7 +433,7 @@ def make_design(logo_src, nome=None):
     t1, t2 = "Aproxime", " o celular"
     w1, w2 = d.textlength(t1, font=fb), d.textlength(t2, font=fr)
     x0 = Wp / 2 - (w1 + w2) / 2
-    d.text((x0, 830 * s), t1, font=fb, fill=accent, anchor="lm")
+    d.text((x0, 830 * s), t1, font=fb, fill=ink, anchor="lm")
     d.text((x0 + w1, 830 * s), t2, font=fr, fill=ink, anchor="lm")
 
     _icon_row(d, 945, s, ink, base)
