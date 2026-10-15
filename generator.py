@@ -195,6 +195,53 @@ def _nfc_art(d, cx, cy, s, ink, bg):
     d.rounded_rectangle(S(px1 - 16, cy - 40, px1 + 20, cy + 45), 18 * s, fill=bg, outline=ink, width=lw)
 
 
+def extract_badge(raw, main):
+    """Para foto/print: acha a maior mancha da cor da marca (ex.: círculo da logo),
+    recorta só ela (sem o fundo) e limpa ícones escuros pequenos na borda.
+    Retorna RGBA ou None."""
+    rgb = np.array(raw.convert("RGB"))
+    h, w = rgb.shape[:2]
+    diff = np.abs(rgb.astype(np.int16) - np.array(main, np.int16)).sum(2)
+    m = (diff < 110).astype(np.uint8)
+    m = cv2.morphologyEx(m, cv2.MORPH_CLOSE, np.ones((15, 15), np.uint8))
+    n, lab, stats, cent = cv2.connectedComponentsWithStats(m)
+    if n < 2:
+        return None
+    i = 1 + int(np.argmax(stats[1:, cv2.CC_STAT_AREA]))
+    area = stats[i, cv2.CC_STAT_AREA]
+    if area < 0.12 * h * w:
+        return None
+    comp = (lab == i).astype(np.uint8)
+    cnts, _ = cv2.findContours(comp, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    (cx, cy), r = cv2.minEnclosingCircle(max(cnts, key=cv2.contourArea))
+    fill = cv2.drawContours(np.zeros_like(comp), cnts, -1, 1, -1)
+    circular = fill.sum() / (np.pi * r * r) > 0.72
+    if circular:
+        r *= 0.985
+        mask = np.zeros((h, w), np.uint8)
+        cv2.circle(mask, (int(cx), int(cy)), int(r), 255, -1)
+    else:
+        return None
+    # remove ícones escuros pequenos encostados na borda (ex.: lápis do print do WhatsApp)
+    gray = cv2.cvtColor(rgb, cv2.COLOR_RGB2GRAY)
+    sat = rgb.max(2).astype(np.int16) - rgb.min(2).astype(np.int16)
+    dark = ((gray < 70) & (sat < 45) & (mask > 0)).astype(np.uint8)
+    nd, ld, sd, cd = cv2.connectedComponentsWithStats(dark)
+    fix = np.zeros((h, w), np.uint8)
+    for j in range(1, nd):
+        a = sd[j, cv2.CC_STAT_AREA]
+        dist = np.hypot(cd[j][0] - cx, cd[j][1] - cy)
+        if a < 0.03 * area and dist > 0.6 * r:
+            fix[ld == j] = 255
+    if fix.any():
+        fix = cv2.dilate(fix, np.ones((7, 7), np.uint8))
+        rgb = cv2.inpaint(rgb, fix, 7, cv2.INPAINT_TELEA)
+    mask = cv2.GaussianBlur(mask, (5, 5), 0)
+    ys, xs = np.nonzero(mask > 10)
+    out = np.dstack([rgb, mask])[ys.min():ys.max() + 1, xs.min():xs.max() + 1]
+    return Image.fromarray(out.astype(np.uint8), "RGBA")
+
+
 def make_design(logo_src, nome=None):
     raw = load_image(logo_src)
     logo, complex_bg = clean_logo(raw)
@@ -256,7 +303,12 @@ def make_design(logo_src, nome=None):
 
     # ---- logo integrada (sem fundo)
     lcx, lcy = 500, 205
-    if complex_bg:
+    sq = 0.8 <= raw.width / raw.height <= 1.25
+    badge = extract_badge(raw, main) if (complex_bg or (opaque and lum(bmed) < 70 and sq)) else None
+    if badge is not None:
+        lg = _fit(badge, 300 * s, 300 * s)
+        im.paste(lg, (lcx * s - lg.width // 2, lcy * s - lg.height // 2), lg)
+    elif complex_bg:
         ar = raw.width / raw.height
         if 0.8 <= ar <= 1.25:
             dia = 290
