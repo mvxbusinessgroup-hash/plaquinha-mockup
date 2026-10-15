@@ -5,7 +5,7 @@ import urllib.request
 
 import cv2
 import numpy as np
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw, ImageFont, ImageFilter
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 A = lambda f: os.path.join(HERE, f)
@@ -171,28 +171,54 @@ def _icon_row(d, cy, s, ink, bg):
         d.polygon([(x - 25 * s, y + 12 * s), (x - 34 * s, y + 36 * s), (x - 9 * s, y + 26 * s)], fill=ink)
 
 
-def _nfc_art(d, cx, cy, s, ink, bg):
-    lw = 7 * s
-    S = lambda *p: [v * s for v in p]
-    # leitor (oval) com ondas
-    d.ellipse(S(cx - 215, cy - 95, cx + 35, cy + 75), outline=ink, width=lw)
-    wx, wy = cx - 120, cy - 10
-    for rr in (18, 36, 54):
-        d.arc(S(wx - rr, wy - rr, wx + rr, wy + rr), -48, 48, fill=ink, width=lw)
-    # palma/punho atrás do celular
-    d.rounded_rectangle(S(cx - 25, cy + 30, cx + 135, cy + 150), 50 * s, fill=bg, outline=ink, width=lw)
-    d.rectangle(S(cx + 22, cy + 140, cx + 120, cy + 185), fill=bg)
-    d.line(S(cx + 22, cy + 138, cx + 22, cy + 185), fill=ink, width=lw)
-    d.line(S(cx + 120, cy + 138, cx + 120, cy + 185), fill=ink, width=lw)
-    # celular
-    px0, py0, px1, py1 = cx - 5, cy - 135, cx + 110, cy + 95
-    d.rounded_rectangle(S(px0, py0, px1, py1), 22 * s, fill=bg, outline=ink, width=lw)
-    d.rounded_rectangle(S((px0 + px1) / 2 - 18, py0 + 12, (px0 + px1) / 2 + 18, py0 + 19), 4 * s, fill=ink)
-    # dedos envolvendo o lado esquerdo
-    for fy in (cy - 15, cy + 20, cy + 55):
-        d.rounded_rectangle(S(px0 - 42, fy, px0 + 26, fy + 32), 16 * s, fill=bg, outline=ink, width=lw)
-    # polegar no lado direito
-    d.rounded_rectangle(S(px1 - 16, cy - 40, px1 + 20, cy + 45), 18 * s, fill=bg, outline=ink, width=lw)
+
+def nfc_mask(scale=4):
+    W, H = 640, 370
+    k = scale
+    def P(*v): return [x * k for x in v]
+    M = Image.new("L", (W * k, H * k), 0)
+    d = ImageDraw.Draw(M)
+    # palma (forma sólida), suavizada
+    palm = Image.new("L", M.size, 0); pd = ImageDraw.Draw(palm)
+    pd.ellipse(P(478, 92, 556, 182), fill=255)            # polegar
+    pd.polygon(P(470, 150, 560, 130, 600, 210, 612, 300, 622, 360, 470, 362, 418, 318, 470, 290), fill=255)
+    pd.ellipse(P(540, 150, 615, 300), fill=255)
+    palm = palm.filter(ImageFilter.GaussianBlur(6 * k)).point(lambda v: 255 if v > 128 else 0)
+    M.paste(255, (0, 0), palm)
+    # recorte da tela do celular + contorno
+    d.rounded_rectangle(P(352, 42, 522, 302), 24 * k, fill=0)
+    d.rounded_rectangle(P(352, 42, 522, 302), 24 * k, outline=255, width=14 * k)
+    # oval aberto na direita
+    sw = 15 * k
+    box = P(40, 18, 380, 238)
+    d.arc(box, 38, 322, fill=255, width=sw)
+    cx, cy, rx, ry = 210 * k, 128 * k, 170 * k - sw / 2, 110 * k - sw / 2
+    for a in (38, 322):
+        t = np.radians(a); x, y = cx + rx * np.cos(t), cy + ry * np.sin(t)
+        d.ellipse([x - sw / 2, y - sw / 2, x + sw / 2, y + sw / 2], fill=255)
+    # ondas
+    wx, wy = 185 * k, 128 * k
+    for r in (24, 54, 84):
+        R = r * k; ww = 18 * k
+        d.arc([wx - R, wy - R, wx + R, wy + R], -48, 48, fill=255, width=ww)
+        for a in (-48, 48):
+            t = np.radians(a); rr = R - ww / 2
+            x, y = wx + rr * np.cos(t), wy + rr * np.sin(t)
+            d.ellipse([x - ww / 2, y - ww / 2, x + ww / 2, y + ww / 2], fill=255)
+    # dedos (pontas arredondadas sobre a borda esquerda do celular)
+    for fy in (96, 140, 184, 228):
+        d.ellipse(P(330, fy + 2, 382, fy + 38), fill=255)
+    return M.filter(ImageFilter.GaussianBlur(0.8 * k))
+
+
+
+def _nfc_art(im, cx, cy, s, ink, bg=None):
+    """Ícone 'aproxime o celular' no mesmo estilo das plaquinhas do Marcos."""
+    m = nfc_mask(3)
+    w = int(470 * s)
+    h = int(m.height * w / m.width)
+    m = m.resize((w, h), Image.LANCZOS)
+    im.paste(ink, (int(cx * s - w / 2), int(cy * s - h / 2)), m)
 
 
 def extract_badge(raw, main):
@@ -306,7 +332,7 @@ def make_design(logo_src, nome=None):
     sq = 0.8 <= raw.width / raw.height <= 1.25
     badge = extract_badge(raw, main) if (complex_bg or (opaque and lum(bmed) < 70 and sq)) else None
     if badge is not None:
-        lg = _fit(badge, 300 * s, 300 * s)
+        lg = _fit(badge, 250 * s, 250 * s)
         im.paste(lg, (lcx * s - lg.width // 2, lcy * s - lg.height // 2), lg)
     elif complex_bg:
         ar = raw.width / raw.height
@@ -324,12 +350,13 @@ def make_design(logo_src, nome=None):
             ImageDraw.Draw(m).rounded_rectangle([0, 0, ph.width - 1, ph.height - 1], 30 * s, fill=255)
             im.paste(ph, ((lcx - cw // 2) * s, (lcy - ch // 2) * s), m)
     else:
-        lg = _fit(logo, 520 * s, 300 * s)
+        lg = _fit(logo, 400 * s, 220 * s)
         im.paste(lg, (lcx * s - lg.width // 2, lcy * s - lg.height // 2), lg)
     d = ImageDraw.Draw(im)
 
     # arte NFC
-    _nfc_art(d, 520, 560, s, ink, base if not dark else mix(base, accent, 0.0))
+    _nfc_art(im, 500, 600, s, ink)
+    d = ImageDraw.Draw(im)
 
     # Aproxime o celular
     fb = font("Bold", 46)
